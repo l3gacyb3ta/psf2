@@ -3,25 +3,12 @@
 
 #![no_std]
 
-#[cfg(feature = "std")]
-extern crate std;
 
-#[cfg(feature = "unicode")]
-extern crate alloc;
-
-#[cfg(feature = "unicode")]
-use alloc::string::String;
-#[cfg(feature = "unicode")]
-use hashbrown::HashMap;
-#[cfg(feature = "unicode")]
-use rustc_hash::FxHasher;
 
 /// A well-formed PSF2 font
 #[derive(Clone)]
 pub struct Font<Data> {
     data: Data,
-    #[cfg(feature = "unicode")]
-    unicode: HashMap<String, u32, core::hash::BuildHasherDefault<FxHasher>>,
 }
 
 impl<Data: AsRef<[u8]>> Font<Data> {
@@ -35,8 +22,6 @@ impl<Data: AsRef<[u8]>> Font<Data> {
 
         let mut result = Self {
             data,
-            #[cfg(feature = "unicode")]
-            unicode: HashMap::default(),
         };
 
         let glyphs_size = result
@@ -50,35 +35,6 @@ impl<Data: AsRef<[u8]>> Font<Data> {
 
         if glyphs_end > result.data.as_ref().len() {
             return Err(ParseError::UnexpectedEnd);
-        }
-
-        #[cfg(feature = "unicode")]
-        if result.flags() & 0x01 != 0 {
-            let table = &result.data.as_ref()[glyphs_end..];
-            let mut index = 0;
-            let mut start = 0;
-            let mut in_sequence = false;
-            for (i, &x) in table.iter().enumerate() {
-                if x == 0xFF || x == 0xFE {
-                    let slice = &table[start..i];
-                    if let Ok(s) = core::str::from_utf8(slice) {
-                        if in_sequence {
-                            result.unicode.insert(s.into(), index);
-                        } else {
-                            for c in s.chars() {
-                                result.unicode.insert(c.into(), index);
-                            }
-                        }
-                    }
-
-                    start = i + 1;
-                    in_sequence = true;
-                }
-                if x == 0xFF {
-                    index += 1;
-                    in_sequence = false;
-                }
-            }
         }
 
         Ok(result)
@@ -122,49 +78,6 @@ impl<Data: AsRef<[u8]>> Font<Data> {
         self.get_index(c as u32)
     }
 
-    /// Like [`get_ascii`](Self::get_ascii), but for a unicode scalar value
-    #[cfg(feature = "unicode")]
-    pub fn get_unicode(&self, c: char) -> Option<Glyph<'_>> {
-        // Encode UTF-8
-        let c = c as u32;
-        let mut buf = [0u8; 4];
-        let len = if c <= 0x7F {
-            return self.get_ascii(c as u8);
-        } else if c <= 0x07FF {
-            buf[0] = 0xC0 | ((c >> 6) as u8 & 0x1F);
-            buf[1] = 0x80 | (c & 0x3F) as u8;
-            2
-        } else if c <= 0xFFFF {
-            buf[0] = 0xE0 | ((c >> 12) as u8 & 0x0F);
-            buf[1] = 0x80 | ((c >> 6) as u8 & 0x3F);
-            buf[2] = 0x80 | (c as u8 & 0x3F);
-            3
-        } else if c <= 0x10FFFF {
-            buf[0] = 0xF0 | ((c >> 18) as u8 & 0x07);
-            buf[1] = 0x80 | ((c >> 12) as u8 & 0x3F);
-            buf[2] = 0x80 | ((c >> 6) as u8 & 0x3F);
-            buf[3] = 0x80 | (c as u8 & 0x3F);
-            4
-        } else {
-            // Invalid Unicode; unreachable?
-            return None;
-        };
-        self.get_unicode_composed(core::str::from_utf8(&buf[..len]).unwrap())
-    }
-
-    /// Like [`get_unicode`](Self::get_unicode), but for one or more Unicode codepoints corresponding to a single glyph
-    #[cfg(feature = "unicode")]
-    pub fn get_unicode_composed(&self, seq: &str) -> Option<Glyph<'_>> {
-        let index = self.unicode.get(seq).copied().or_else(|| {
-            if seq.is_ascii() && seq.len() == 1 {
-                seq.chars().next().map(|x| x as u32)
-            } else {
-                None
-            }
-        })?;
-        self.get_index(index)
-    }
-
     #[inline]
     fn get_index(&self, i: u32) -> Option<Glyph<'_>> {
         let offset = self.headersize() + i * self.charsize();
@@ -187,19 +100,6 @@ pub enum ParseError {
     /// Missing magic number; probably not PSF data.
     BadMagic,
 }
-
-#[cfg(feature = "std")]
-impl std::fmt::Display for ParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
-        f.pad(match *self {
-            ParseError::UnexpectedEnd => "unexpected end",
-            ParseError::BadMagic => "bad magic number",
-        })
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for ParseError {}
 
 /// Iterator over each row of a glyph
 #[derive(Clone)]
